@@ -32,8 +32,41 @@ async function main() {
     // Search Engine
     app.get('/recipes', async function (req, res) {
         try {
-            const { tags, cuisine, ingredients, name } = req.query;
+            const { tags, cuisine, ingredients, name, prepTimeLt, prepTimeGt, cookTimeLt, cookTimeGt, dishType } = req.query;
             let query = {};
+            if (cookTimeLt !== undefined) {
+                const cookTimeLessThan = Number(cookTimeLt)
+                if (isNaN(cookTimeLessThan) || cookTimeLessThan <= 0) {
+                    return res.status(400).json({ error: 'cookTimeLt must be a valid number' })
+                }
+                query.cookTime = { $lt: cookTimeLessThan }
+            }
+
+            if (cookTimeGt !== undefined) {
+                const cookTimeMoreThan = Number(cookTimeGt)
+                if (isNaN(cookTimeMoreThan) || cookTimeMoreThan <= 0) {
+                    return res.status(400).json({ error: 'cookTimeGt must be a valid number' })
+                }
+                query.cookTime = { $gt: cookTimeMoreThan }
+            }
+
+            if (prepTimeLt !== undefined) {
+                const lessThan = Number(prepTimeLt)
+                if (isNaN(lessThan) || lessThan <= 0) {
+                    return res.status(400).json({ error: 'prepTimeLt must be a valid number' })
+                }
+                query.prepTime = { $lt: lessThan }
+            }
+            if (prepTimeGt !== undefined) {
+                const moreThan = Number(prepTimeGt)
+                if (isNaN(moreThan) || moreThan <= 0) {
+                    return res.status(400).json({ error: 'prepTimeGt must be a valid number' })
+                }
+                query.prepTime = { $gt: moreThan }
+            }
+            if (dishType) {
+                query.dishType = { $regex: dishType, $options: 'i' };
+            }
 
             if (tags) {
                 query['tags.name'] = { $in: tags.split(',') };
@@ -66,20 +99,17 @@ async function main() {
     });
     //middleware
     async function creatingRecipe(req, res, next) {
-        const { name, cuisine, prepTime, cookTime, servings, ingredients, instructions, tags } = req.body;
+        const { name, cuisine, prepTime, cookTime, servings, ingredients, instructions, tags, dishType } = req.body;
 
-        // Basic validation
-        if (!name || !cuisine || !ingredients || !instructions || !tags) {
+        if (!name || !cuisine || !ingredients || !instructions || !tags || !dishType) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
-        // Fetch the cuisine document
         const cuisineDoc = await db.collection('cuisines').findOne({ name: cuisine });
         if (!cuisineDoc) {
             return res.status(400).json({ error: 'Invalid cuisine' });
         }
 
-        // Fetch the tag documents
         const tagDocs = await db.collection('tags').find({ name: { $in: tags } }).toArray();
         if (tagDocs.length !== tags.length) {
             return res.status(400).json({ error: 'One or more invalid tags' });
@@ -100,7 +130,8 @@ async function main() {
             tags: tagDocs.map(tag => ({
                 _id: tag._id,
                 name: tag.name
-            }))
+            })),
+            dishType
         }
         next()
     }
@@ -156,6 +187,81 @@ async function main() {
             res.status(500).json({ error: 'Internal server error' });
         }
     });
+    //add a course
+    app.post('/courses', async function (req, res) {
+        try {
+            const { name, description } = req.body
+            const recipes = []
+            const newCourse = {
+                name,
+                description,
+                recipes
+            }
+            const result = await db.collection('courses').insertOne(newCourse)
+            res.status(201).json({
+                message: 'Course created successfully',
+                courseId: result.insertedId
+            })
+        } catch (error) {
+            console.error('Error creating course', error);
+            res.status(500).json({ error: 'Internal server error' })
+        }
+
+    })
+    // add a recipe to a course
+    app.post('/courses/:courseId/recipe/:recipeId', async function (req, res) {
+        try {
+            const courseId = req.params.courseId
+            const recipeId = req.params.recipeId
+            const name = req.body
+            if (!name) {
+                return res.status(400).json({ error: 'Missing Required fields' })
+            }
+            const addRecipe = {
+                recipe_id: new ObjectId(recipeId),
+                name
+            }
+            const result = await db.collection('courses').updateOne(
+                { _id: new ObjectId(courseId) },
+                { $push: { recipes: addRecipe } }
+            )
+            if (result.matchedCount === 0) {
+                return res.status(404).json({ error: 'Course not found' });
+            }
+            res.status(201).json({
+                message: 'Recipe added to Course successfully',
+            });
+        } catch (error) {
+            console.error('Error creating course', error);
+            res.status(500).json({ error: 'Internal server error' })
+        }
+    })
+    app.delete('/courses/:courseId/recipe/:recipeId', async function (req, res) {
+        try {
+            const courseId = req.params.courseId
+            const recipeId = req.params.recipeId
+            const result = await db.collection('courses').updateOne(
+                { _id: new ObjectId(courseId) },
+                {
+                    $pull: {
+                        recipes: { recipe_id: new ObjectId(recipeId) }
+                    }
+                }
+            )
+            if (result.matchedCount === 0) {
+                return res.status(404).json({ error: "Course not found" })
+            }
+            if (result.modifiedCount === 0) {
+                return res.status(404).json({ error: "Recipe not found" })
+            }
+            res.json({
+                message: 'Recipe deleted successfully'
+            })
+        } catch (error) {
+            console.error('Error deleting recipe:', error);
+            res.status(500).json({ error: 'Internal server error' });
+        }
+    })
 }
 main()
 
